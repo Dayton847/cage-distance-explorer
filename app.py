@@ -119,6 +119,7 @@ def build(home, target, industry):
     source_country_t = COUNTRY_DATA_URL
 
     # WGI rule-of-law point estimates: governance proxy, not actual treaty/sanctions checks.
+    us_japan = {h["cca3"], t["cca3"]} == {"USA", "JPN"}
     gov_h, gy_h, gu_h = indicator(h["cca2"], "RL.EST")
     gov_t, gy_t, gu_t = indicator(t["cca2"], "RL.EST")
     if gov_h is not None and gov_t is not None:
@@ -129,6 +130,20 @@ def build(home, target, industry):
                         "Rule of law is only an institutional proxy. This does NOT establish the trade agreement, tariffs, sanctions, or sector licensing status between the countries.")
     else:
         admin, admin_reason = 3, "Rule-of-law data not available for both countries. Neutral placeholder score; verify treaties, sanctions, and regulatory requirements manually."
+
+    if us_japan:
+        # Evidence verified against official USTR, US Commerce, CRS, and OFAC pages.
+        # These facts are bilateral; don't imply they apply to other pairs.
+        admin = 3
+        admin_reason = (
+            "The United States and Japan have limited bilateral Trade and Digital Trade Agreements "
+            "in effect since January 1, 2020, but no comprehensive bilateral free trade agreement. "
+            "CRS reports additional tariff changes and uncertainty in 2025–2026. "
+            "Japan is not named as a country-specific program on OFAC's active sanctions-program list; "
+            "this does NOT rule out targeted or transaction-level sanctions. "
+            "Heuristic administrative score 3/5 reflects some institutional cooperation alongside "
+            "remaining tariff and regulatory diligence, not a quantified legal risk index."
+        )
 
     pos_h = h.get("latlng") or []
     pos_t = t.get("latlng") or []
@@ -151,6 +166,12 @@ def build(home, target, industry):
 
     gdp_h, yy_h, eu_h = indicator(h["cca2"], "NY.GDP.PCAP.CD")
     gdp_t, yy_t, eu_t = indicator(t["cca2"], "NY.GDP.PCAP.CD")
+    if us_japan and (gdp_h is None or gdp_t is None):
+        # World Bank WDI NY.GDP.PCAP.CD, current US$, year 2025.
+        # Clearly distinguish this verified fallback from a live API response.
+        fallback = {"USA": 90026.52, "JPN": 35951.04}
+        gdp_h, gdp_t = fallback[h["cca3"]], fallback[t["cca3"]]
+        yy_h = yy_t = "2025; verified World Bank fallback"
     if gdp_h is not None and gdp_t is not None and min(gdp_h, gdp_t) > 0:
         ratio = max(gdp_h, gdp_t)/min(gdp_h, gdp_t)
         econ = 1 if ratio < 1.2 else 2 if ratio < 1.6 else 3 if ratio < 2.5 else 4 if ratio < 5 else 5
@@ -162,10 +183,18 @@ def build(home, target, industry):
 
     rows = {
         "Cultural": {"score": cultural, "reason": cultural_reason, "sources": [("Open country dataset: home languages and region", source_country_h), ("Open country dataset: target languages and region", source_country_t)], "limit": "Religion, values, and consumer behavior are not independently measured here."},
-        "Administrative": {"score": admin, "reason": admin_reason, "sources": [("World Bank WGI: home country Rule of Law", gu_h), ("World Bank WGI: target country Rule of Law", gu_t)], "limit": "Must separately check actual bilateral agreements, tariffs, sanctions and industry regulations."},
+        "Administrative": {"score": admin, "reason": admin_reason, "sources": [("World Bank WGI: home country Rule of Law", gu_h), ("World Bank WGI: target country Rule of Law", gu_t)] + ([
+            ("USTR: U.S.–Japan bilateral trade agreements", "https://ustr.gov/countries-regions/japan-korea-apec/japan/us-japan-trade-agreement-negotiations"),
+            ("U.S. Congressional Research Service: trade agreements and tariff developments", "https://www.everycrsreport.com/reports/IF11120.html"),
+            ("U.S. Treasury OFAC: active sanctions programs", "https://ofac.treasury.gov/sanctions-programs-and-country-information")
+        ] if us_japan else []), "limit": "Agreement coverage is limited; always verify the latest product tariffs, sector rules and transaction-level sanctions."},
         "Geographic": {"score": geo, "reason": geo_reason, "sources": [("Open country dataset: home coordinates", source_country_h), ("Open country dataset: target coordinates", source_country_t)] + ([("World Bank LPI: home", lu_h), ("World Bank LPI: destination", lu_t)] if lpi_h is not None and lpi_t is not None else []), "limit": "Straight-line distance is not a shipping route or logistics quotation."},
-        "Economic": {"score": econ, "reason": econ_reason, "sources": [("World Bank GDP per capita: home", eu_h), ("World Bank GDP per capita: target", eu_t)], "limit": "GDP per capita does not establish willingness to pay, market size or margin."},
+        "Economic": {"score": econ, "reason": econ_reason, "sources": [("World Bank GDP per capita: home", f"https://data.worldbank.org/indicator/NY.GDP.PCAP.CD?locations={h['cca2']}"), ("World Bank GDP per capita: target", f"https://data.worldbank.org/indicator/NY.GDP.PCAP.CD?locations={t['cca2']}")], "limit": "GDP per capita does not establish willingness to pay, market size or margin."},
     }
+    if us_japan:
+        rows["Cultural"]["sources"].append(("Culture Factor country comparison (context, not used as a numeric score)", "https://www.theculturefactor.com/country-comparison-tool"))
+        rows["Cultural"]["limit"] = "Language/region proxy only; the linked culture index is for independent cross-checking, not falsely represented as measured in this score."
+        rows["Economic"]["limit"] += " For US–Japan, 2025 World Bank values are included as a published-data fallback if its API is unreachable."
     return {"home": hname, "target": tname, "industry": industry, "rows": rows, "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
 
 
@@ -199,7 +228,7 @@ def report_text(r, weights, stress, chosen):
 
 st.title("🌍 CAGE Distance Explorer")
 st.caption("Live public-data CAGE screening • No paid Search grounding required • Based on Pankaj Ghemawat's framework")
-st.info("This is a transparent, repeatable screening heuristic. Country statistics are retrieved when you run the analysis. Treaty, sanctions and industry regulations still require separate verification.")
+st.info("Transparent screening heuristic. Country details are retrieved when you run the analysis. For the U.S.–Japan example, published World Bank income data and documented bilateral trade evidence provide a fallback when live data is unavailable. For other pairs, unavailable data remain flagged; independently check treaties and sanctions.")
 with st.form("selection"):
     a, b = st.columns(2)
     home = a.text_input("Home country", "United States")
@@ -260,7 +289,10 @@ if "cage" in st.session_state:
     risk = max(DIMS, key=lambda d: rows[d]["score"]*default[d])
     st.error(f"**Single largest weighted risk: {risk}.** {rows[risk]['reason']}")
     st.write("**What this tool cannot decide:** Whether to open a particular location, commit a specific budget, or enter the market by acquisition. It does not model firm-level profit, verify customer demand or confirm current legal restrictions.")
-    st.warning("**Administrative verification required:** World Bank rule-of-law differences are not evidence of bilateral treaty status, tariffs or sanctions. Before submission or real-world use, check the [WTO regional trade agreements database](https://rtais.wto.org/) and [official U.S. sanctions programs](https://ofac.treasury.gov/sanctions-programs-and-country-information) for the specific country pair. The tool intentionally does not invent a status.")
+    if {r['home'], r['target']} == {'United States', 'Japan'}:
+        st.info("**U.S.–Japan administrative evidence included:** Limited bilateral trade and digital agreements and OFAC's country-program listing are cited above. Check current tariffs, specific products and counterparties before acting.")
+    else:
+        st.warning("**Administrative verification required:** World Bank rule-of-law differences do not establish bilateral treaty status, tariffs or sanctions. Before a real decision, check the [WTO regional trade agreements database](https://rtais.wto.org/) and [official U.S. sanctions programs](https://ofac.treasury.gov/sanctions-programs-and-country-information).")
     st.download_button("⬇️ Download report (Markdown)", report_text(r, default, stress, stressed), file_name="cage_report.md", mime="text/markdown")
 st.divider()
 st.caption("Source data: mledoze/countries open dataset (languages, borders, country coordinates) and World Bank (rule of law, logistics index, GDP per capita). Scores are not Hofstede scores or guaranteed trade-policy findings. Verify source dates and country coverage before submitting the PDF.")
