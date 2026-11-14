@@ -60,7 +60,7 @@ Separate facts from interpretation; mark unsupported figures as UNVERIFIED, neve
         contents=prompt,
         config=types.GenerateContentConfig(
             tools=[types.Tool(google_search=types.GoogleSearch())],
-            temperature=0.2,
+            
         ),
     )
     notes = result.text or ""
@@ -96,7 +96,7 @@ Return ONLY JSON matching this shape, with all four dimension keys:
     response = client.models.generate_content(
         model=model,
         contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1),
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
     )
     data = clean_json(response.text)
     for dim in DIMENSIONS:
@@ -143,7 +143,7 @@ with st.form("inputs"):
         target = st.text_input("Target country", value="Japan").strip()
     industry_choice = st.selectbox("Industry (optional)", list(INDUSTRY_WEIGHTS.keys()) + ["Other (describe)"] , index=1)
     industry = st.text_input("Describe your industry", value="", placeholder="e.g., medical devices") if industry_choice == "Other (describe)" else industry_choice
-    model = st.selectbox("Gemini model", ["gemini-2.5-flash", "gemini-2.5-flash-lite"], index=0, help="Availability and free-tier limits depend on your API project.")
+    model = st.selectbox("Gemini model", ["gemini-3.8-flash"], index=0)
     analyze = st.form_submit_button("🔎 Research & analyze", type="primary")
 
 if analyze:
