@@ -32,20 +32,47 @@ def req_json(url):
     return r.json()
 
 
+COUNTRY_DATA_URL = "https://raw.githubusercontent.com/mledoze/countries/master/countries.json"
+COUNTRY_DATA_PAGE = "https://github.com/mledoze/countries"
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def all_countries():
+    # The legacy REST Countries v3 endpoint has been retired. This open data
+    # repository provides the compatible country records without an API key.
+    data = req_json(COUNTRY_DATA_URL)
+    if not isinstance(data, list) or not data:
+        raise ValueError("The country dataset returned no records")
+    return data
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def country(name):
-    from urllib.parse import quote
-    found = req_json("https://restcountries.com/v3.1/name/" + quote(name) + "?fields=name,cca2,cca3,languages,capital,capitalInfo,latlng,borders,landlocked,region,subregion")
-    if not found or not isinstance(found, list):
-        raise ValueError("Country not found: " + name)
-    exact = [x for x in found if name.lower() in (x.get("name", {}).get("common", "").lower(), x.get("name", {}).get("official", "").lower())]
-    return (exact or found)[0]
+    q = name.strip().casefold()
+    aliases = {"usa": "united states", "us": "united states", "u.s.": "united states",
+               "uk": "united kingdom", "u.k.": "united kingdom", "south korea": "south korea",
+               "russia": "russia", "vietnam": "vietnam"}
+    q = aliases.get(q, q)
+    entries = all_countries()
+    def names(c):
+        return [c.get("name", {}).get("common", ""), c.get("name", {}).get("official", ""),
+                c.get("cca2", ""), c.get("cca3", "")] + c.get("altSpellings", [])
+    exact = [c for c in entries if q in {v.casefold() for v in names(c) if isinstance(v, str)}]
+    if exact:
+        return exact[0]
+    partial = [c for c in entries if q in c.get("name", {}).get("common", "").casefold()]
+    if len(partial) == 1:
+        return partial[0]
+    raise ValueError(f"Country not found or ambiguous: {name}. Try the full country name")
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def indicator(code, metric):
     url = f"https://api.worldbank.org/v2/country/{code}/indicator/{metric}?format=json&per_page=80"
-    payload = req_json(url)
+    try:
+        payload = req_json(url)
+    except requests.RequestException:
+        return None, None, url
     if not isinstance(payload, list) or len(payload) < 2 or not payload[1]:
         return None, None, url
     rows = [x for x in payload[1] if x.get("value") is not None]
@@ -77,7 +104,7 @@ def build(home, target, industry):
     if h["cca3"] == t["cca3"]:
         raise ValueError("Select two different countries.")
     hname, tname = h["name"]["common"], t["name"]["common"]
-    csource = "https://restcountries.com/"
+    csource = COUNTRY_DATA_PAGE
     langs_h = set(h.get("languages", {}).values())
     langs_t = set(t.get("languages", {}).values())
     shared = sorted(langs_h & langs_t)
@@ -88,8 +115,8 @@ def build(home, target, industry):
                        f"{tname}: {', '.join(sorted(langs_t)) or 'unavailable'}. "
                        + (f"Shared language(s): {', '.join(shared)}. " if shared else "No shared listed official language. ")
                        + "This is a language/region proxy, not a validated measure of values, religion or cultural preferences.")
-    source_country_h = f"https://restcountries.com/v3.1/alpha/{h['cca3']}?fields=name,languages,capital,capitalInfo,borders,region"
-    source_country_t = f"https://restcountries.com/v3.1/alpha/{t['cca3']}?fields=name,languages,capital,capitalInfo,borders,region"
+    source_country_h = COUNTRY_DATA_URL
+    source_country_t = COUNTRY_DATA_URL
 
     # WGI rule-of-law point estimates: governance proxy, not actual treaty/sanctions checks.
     gov_h, gy_h, gu_h = indicator(h["cca2"], "RL.EST")
@@ -103,18 +130,16 @@ def build(home, target, industry):
     else:
         admin, admin_reason = 3, "Rule-of-law data not available for both countries. Neutral placeholder score; verify treaties, sanctions, and regulatory requirements manually."
 
-    cap_h = h.get("capital", ["Capital"])[0] if h.get("capital") else "Capital"
-    cap_t = t.get("capital", ["Capital"])[0] if t.get("capital") else "Capital"
-    pos_h = h.get("capitalInfo", {}).get("latlng") or h.get("latlng") or []
-    pos_t = t.get("capitalInfo", {}).get("latlng") or t.get("latlng") or []
+    pos_h = h.get("latlng") or []
+    pos_t = t.get("latlng") or []
     km = haversine(pos_h, pos_t)
     if km is None:
         geo = 3
         geo_reason = "Coordinates unavailable for capital distance; neutral placeholder score."
     else:
         geo = 1 if km < 500 else 2 if km < 2000 else 3 if km < 5000 else 4 if km < 9000 else 5
-        geo_reason = (f"Calculated great-circle capital-to-capital distance: {cap_h} to {cap_t}, approximately {km:,.0f} km "
-                      "from REST Countries capital coordinates (haversine formula). This is NOT actual freight distance or shipping time.")
+        geo_reason = (f"Calculated great-circle country-coordinate to country-coordinate distance: {hname} to {tname}, approximately {km:,.0f} km "
+                      "from the open country dataset coordinates (haversine formula). This is NOT actual freight distance or shipping time.")
     border = t["cca3"] in h.get("borders", []) or h["cca3"] in t.get("borders", [])
     if border:
         geo = max(1, geo-1)
@@ -136,9 +161,9 @@ def build(home, target, industry):
         econ, econ_reason = 3, "Comparable World Bank GDP-per-capita data unavailable; neutral placeholder score."
 
     rows = {
-        "Cultural": {"score": cultural, "reason": cultural_reason, "sources": [("REST Countries: home country languages and region", source_country_h), ("REST Countries: target country languages and region", source_country_t)], "limit": "Religion, values, and consumer behavior are not independently measured here."},
+        "Cultural": {"score": cultural, "reason": cultural_reason, "sources": [("Open country dataset: home languages and region", source_country_h), ("Open country dataset: target languages and region", source_country_t)], "limit": "Religion, values, and consumer behavior are not independently measured here."},
         "Administrative": {"score": admin, "reason": admin_reason, "sources": [("World Bank WGI: home country Rule of Law", gu_h), ("World Bank WGI: target country Rule of Law", gu_t)], "limit": "Must separately check actual bilateral agreements, tariffs, sanctions and industry regulations."},
-        "Geographic": {"score": geo, "reason": geo_reason, "sources": [("REST Countries: capital coordinates", source_country_h), ("REST Countries: destination coordinates", source_country_t)] + ([("World Bank LPI: home", lu_h), ("World Bank LPI: destination", lu_t)] if lpi_h is not None and lpi_t is not None else []), "limit": "Straight-line distance is not a shipping route or logistics quotation."},
+        "Geographic": {"score": geo, "reason": geo_reason, "sources": [("Open country dataset: home coordinates", source_country_h), ("Open country dataset: target coordinates", source_country_t)] + ([("World Bank LPI: home", lu_h), ("World Bank LPI: destination", lu_t)] if lpi_h is not None and lpi_t is not None else []), "limit": "Straight-line distance is not a shipping route or logistics quotation."},
         "Economic": {"score": econ, "reason": econ_reason, "sources": [("World Bank GDP per capita: home", eu_h), ("World Bank GDP per capita: target", eu_t)], "limit": "GDP per capita does not establish willingness to pay, market size or margin."},
     }
     return {"home": hname, "target": tname, "industry": industry, "rows": rows, "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
@@ -183,7 +208,7 @@ with st.form("selection"):
     go = st.form_submit_button("🔎 Research & analyze", type="primary")
 if go:
     try:
-        with st.spinner("Fetching country-level evidence from REST Countries and World Bank…"):
+        with st.spinner("Fetching country-level evidence from open country dataset and World Bank…"):
             st.session_state["cage"] = build(home.strip(), target.strip(), industry)
     except Exception as e:
         st.error(f"Could not retrieve the country data: {e}. Please retry; check spelling and that public APIs are reachable.")
@@ -238,4 +263,4 @@ if "cage" in st.session_state:
     st.warning("**Administrative verification required:** World Bank rule-of-law differences are not evidence of bilateral treaty status, tariffs or sanctions. Before submission or real-world use, check the [WTO regional trade agreements database](https://rtais.wto.org/) and [official U.S. sanctions programs](https://ofac.treasury.gov/sanctions-programs-and-country-information) for the specific country pair. The tool intentionally does not invent a status.")
     st.download_button("⬇️ Download report (Markdown)", report_text(r, default, stress, stressed), file_name="cage_report.md", mime="text/markdown")
 st.divider()
-st.caption("Source data: REST Countries (language, borders, capital coordinates) and World Bank (rule of law, logistics index, GDP per capita). Scores are not Hofstede scores or guaranteed trade-policy findings. Verify source dates and country coverage before submitting the PDF.")
+st.caption("Source data: mledoze/countries open dataset (languages, borders, country coordinates) and World Bank (rule of law, logistics index, GDP per capita). Scores are not Hofstede scores or guaranteed trade-policy findings. Verify source dates and country coverage before submitting the PDF.")
