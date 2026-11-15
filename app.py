@@ -211,6 +211,56 @@ def explanation_for_industry(industry, dim):
     return tailored.get(industry, {}).get(dim, REASONS[dim])
 
 
+def interpretation(r, dim):
+    """Explain the measured difference, the business effect and appropriate response.
+
+    These paragraphs are implications, not extra measured country facts.
+    """
+    sc = r["rows"][dim]["score"]
+    industry = r["industry"]
+    game = industry == "Video game retail"
+    home, target = r["home"], r["target"]
+    if dim == "Cultural":
+        consequence = (
+            "For video game retail, product descriptions, store signage, customer service and marketing need local-language adaptation. "
+            "Differences in buying habits or preferred game genres are plausible risks, but this dataset does not measure them."
+            if game else
+            "Product messaging, support and local customer expectations may require adaptation; actual consumer preferences are not measured."
+        )
+        action = "Test locally translated customer journeys and interview customers before choosing a retail format."
+        why = "The score is based on shared official languages and broad world region only, NOT a measured index of cultural values."
+    elif dim == "Administrative":
+        if {home, target} == {"United States", "Japan"}:
+            consequence = ("The bilateral trade and digital trade agreements facilitate some exchanges, but they do not automatically remove "
+                           "tariffs or retail/import obligations. A retailer selling physical consoles and games must check actual import classification "
+                           "and product rules; digital products create different compliance questions.")
+            action = "Before committing, verify current tariff codes, importer obligations, digital-content rules and local counsel's guidance."
+            why = "The 3/5 is an analyst screening judgment: agreements reduce some friction while regulatory and tariff diligence remains."
+        else:
+            consequence = "A rule-of-law difference may affect operating predictability, but does not establish bilateral trade or sanctions barriers."
+            action = "Confirm actual trade agreements, sanctions and industry rules from official authorities before using the score."
+            why = "This score is a rule-of-law proxy, not a verified country-pair legal assessment."
+    elif dim == "Geographic":
+        consequence = (
+            "For physical consoles, accessories and boxed games, a long cross-border supply chain can increase replenishment time, freight exposure "
+            "and the need for local inventory. Downloadable games largely avoid physical freight, so the same distance matters less for them."
+            if game else
+            "Longer transport routes can increase shipping time, stock requirements and exposure to disruption, depending on how the product is delivered."
+        )
+        action = "Compare actual supplier-to-warehouse routes, shipping quotations and service times; consider local distribution."
+        why = "The 1–5 score comes from straight-line distance thresholds, not confirmed freight cost or logistics difficulty."
+    else:
+        consequence = (
+            "A nominal income gap does not mean Japanese gamers cannot afford games. It does mean a U.S. retailer should not assume "
+            "that U.S. price points, hardware bundles or store economics will carry over unchanged."
+            if game and {home,target} == {"United States", "Japan"} else
+            "Differences in nominal GDP per person suggest local prices and customer budgets may differ, but they do not directly predict sales."
+        )
+        action = "Validate local game and hardware prices, consumer spending, purchasing-power parity and store-level margins."
+        why = "The score uses a ratio of nominal GDP per capita, not household disposable income or demand."
+    return f"**Why {sc}/5:** {why}\n\n**What this could mean for {industry}:** {consequence}\n\n**Recommended management response:** {action}"
+
+
 def report_text(r, weights, stress, chosen):
     rows = r["rows"]
     base = weighted(rows, weights)
@@ -219,7 +269,7 @@ def report_text(r, weights, stress, chosen):
     parts = [f"# CAGE Distance Explorer: {r['home']} → {r['target']}", f"Industry: {r['industry']}", f"Generated: {r['generated']}", "", "Scores are transparent heuristics, not validated country distance indices.", ""]
     for dim in DIMS:
         x = rows[dim]
-        parts += [f"## {dim}: {x['score']}/5", x["reason"], f"Why industry weight {weights[dim]}%: {explanation_for_industry(r['industry'], dim)}", "Sources:"]
+        parts += [f"## {dim}: {x['score']}/5", x["reason"], interpretation(r, dim).replace("**", ""), f"Why industry weight {weights[dim]}%: {explanation_for_industry(r['industry'], dim)}", "Sources:"]
         parts += [f"- {n}: {u}" for n, u in x["sources"] if u]
         parts += [f"Limit: {x['limit']}", ""]
     parts += ["## Default weights and sensitivity", ", ".join(f"{d}: {weights[d]}%" for d in DIMS), f"Default: {base:.2f}/5 ({band(base)})", f"Stress scenario (50% on {chosen}): {changed:.2f}/5 ({band(changed)})", "", "## Recommendation", f"Treat {r['target']} as a {band(base).lower()}-distance screening case for {r['industry']}. Use a phased validation or pilot before making an entry commitment. Check local customer demand, tariffs, legal compliance and unit economics before deciding.", "", "## Single largest risk", f"{highest}: {rows[highest]['reason']}", "", "## Decision this tool cannot support", "It cannot approve opening a specific store, choosing an acquisition target or setting an investment budget. It lacks firm-level costs, demand validation, current tariffs and legal advice.", "", "## Mandatory manual checks", "Confirm bilateral trade agreement status: https://rtais.wto.org/", "Confirm relevant sanctions: https://ofac.treasury.gov/sanctions-programs-and-country-information"]
@@ -228,6 +278,7 @@ def report_text(r, weights, stress, chosen):
 
 st.title("🌍 CAGE Distance Explorer")
 st.caption("Live public-data CAGE screening • No paid Search grounding required • Based on Pankaj Ghemawat's framework")
+st.warning("**Important: Higher scores mean MORE distance and potential friction, not a better opportunity.** 1 = very low distance; 2 = low; 3 = moderate; 4 = high; 5 = very high. Scores are screening proxies, not validated measures of market attractiveness.")
 st.info("Transparent screening heuristic. Country details are retrieved when you run the analysis. For the U.S.–Japan example, published World Bank income data and documented bilateral trade evidence provide a fallback when live data is unavailable. For other pairs, unavailable data remain flagged; independently check treaties and sanctions.")
 with st.form("selection"):
     a, b = st.columns(2)
@@ -256,6 +307,7 @@ if "cage" in st.session_state:
         x = rows[d]
         with st.expander(f"{d}: {x['score']}/5", expanded=True):
             st.write(x["reason"])
+            st.markdown(interpretation(r, d))
             st.write(f"**Industry importance ({default[d]}%):** {explanation_for_industry(r['industry'], d)}")
             st.markdown("**Country-level sources:**")
             for name, url in x["sources"]:
@@ -287,7 +339,7 @@ if "cage" in st.session_state:
     st.markdown("### 3. Recommendation to leadership")
     st.write(f"**Distance assessment:** {band(base)} overall for {r['industry']}, with important differences across the four dimensions. Consider a small pilot or targeted diligence, rather than treating this number as an investment approval.")
     risk = max(DIMS, key=lambda d: rows[d]["score"]*default[d])
-    st.error(f"**Single largest weighted risk: {risk}.** {rows[risk]['reason']}")
+    st.error(f"**Single largest weighted risk: {risk}.** This dimension has the largest score × industry-weight contribution. See its management response above; the evidence is a screening proxy rather than proof of commercial failure.")
     st.write("**What this tool cannot decide:** Whether to open a particular location, commit a specific budget, or enter the market by acquisition. It does not model firm-level profit, verify customer demand or confirm current legal restrictions.")
     if {r['home'], r['target']} == {'United States', 'Japan'}:
         st.info("**U.S.–Japan administrative evidence included:** Limited bilateral trade and digital agreements and OFAC's country-program listing are cited above. Check current tariffs, specific products and counterparties before acting.")
